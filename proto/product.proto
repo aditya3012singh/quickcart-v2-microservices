@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package product;
+
+service ProductService{
+    rpc ReserveStock (ReserveRequest) return (ReserveResponse);
+}
+
+message ReserveRequest{
+    int32 productId=1;
+    int32 quantity=2;
+}
+
+message ReserveResponse {
+  bool success=1;
+  string message=2;
+}
