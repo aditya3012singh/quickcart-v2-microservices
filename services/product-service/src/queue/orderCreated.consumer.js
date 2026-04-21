@@ -1,17 +1,19 @@
 const amqp = require("amqplib");
-const { pool } = require("../db");
+const { pool } = require("../db/pool");
 
-async function startConsumer() {
-  const conn = await amqp.connect("amqp://rabbitmq");
-  const channel = await conn.createChannel();
+async function startConsumer(retries = 20, delay = 2000) {
+  while (retries > 0) {
+    try {
+      const conn = await amqp.connect("amqp://rabbitmq");
+      const channel = await conn.createChannel();
 
-  await channel.assertQueue("order_created", { durable: true });
+      await channel.assertQueue("order_created", { durable: true });
 
-  channel.prefetch(1);
+      channel.prefetch(1);
 
-  console.log("📦 Waiting for ORDER_CREATED events");
+      console.log("📦 Waiting for ORDER_CREATED events");
 
-  channel.consume("order_created", async (msg) => {
+      channel.consume("order_created", async (msg) => {
     if (!msg) return;
 
     let data;
@@ -80,6 +82,23 @@ async function startConsumer() {
       client.release();
     }
   });
+
+      // If we get here, connection is established, so return
+      return;
+    } catch (err) {
+      console.error("❌ RabbitMQ connection failed:", err.message);
+
+      retries--;
+
+      if (retries === 0) {
+        console.error("❌ Exhausted all RabbitMQ retries. Exiting...");
+        process.exit(1);
+      }
+
+      console.log(`⏳ Retrying RabbitMQ in ${delay / 1000}s... (${retries} left)`);
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
 }
 
 module.exports = startConsumer;

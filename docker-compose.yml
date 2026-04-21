@@ -1,0 +1,83 @@
+
+
+services:
+  product-db:
+    image: postgres:15
+    container_name: product-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: productdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - product-db-data:/var/lib/postgresql/data
+      - ./db-init/product-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  order-db:
+    image: postgres:15
+    container_name: order-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: orderdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
+      - ./db-init/order-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  product-service:
+    build: ./services/product-service
+    container_name: product-service
+    ports:
+      - "3002:3002"
+    environment:
+      DB_HOST: product-db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: productdb
+    depends_on:
+      - product-db
+      - rabbitmq
+
+  order-service:
+    build: ./services/order-service
+    container_name: order-service
+    ports:
+      - "3003:3003"
+    environment:
+      DB_HOST: order-db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: orderdb
+    depends_on:
+      - order-db
+      - rabbitmq
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+
+  gateway:
+    image: nginx:latest
+    ports:
+      - "8080:80"
+    container_name: gateway
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - product-service
+      - order-service
+
+volumes:
+  product-db-data:
+  order-db-data:
+  
+
+

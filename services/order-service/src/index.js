@@ -15,6 +15,8 @@ app.post("/", async (req, res) => {
 
   try {
     // 🔥 Step 1: Reserve stock (atomic)
+    // ⚠️ PHASE 1 LIMITATION: If order creation fails below, stock remains reserved forever
+    // This will be fixed in Phase 2 with saga compensation (releaseReservation RPC call)
     const result = await reserveStock(productId, quantity);
 
     if (!result.success) {
@@ -42,6 +44,7 @@ app.post("/", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Order failed:", err);
+    // ⚠️ NOTE: Stock may be orphaned if error occurs after reservation
     res.status(500).json({ error: "Order failed" });
   }
 });

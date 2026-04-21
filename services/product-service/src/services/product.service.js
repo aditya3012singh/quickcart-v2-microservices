@@ -1,4 +1,4 @@
-const { pool } = require("../db");
+const { pool } = require("../db/pool");
 
 async function reserveStock(productId, quantity) {
   if (!productId || quantity <= 0) {

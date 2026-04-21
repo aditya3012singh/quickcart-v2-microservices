@@ -1,8 +1,9 @@
 const grpc = require("@grpc/grpc-js");
 const protoLoader = require("@grpc/proto-loader");
+const path = require("path");
 const { reserveStock } = require("../services/product.service");
 
-const packageDef = protoLoader.loadSync("/app/proto/product.proto");
+const packageDef = protoLoader.loadSync(path.join(__dirname, "../../proto/product.proto"));
 const grpcObject = grpc.loadPackageDefinition(packageDef);
 const productPackage = grpcObject.product;
 
