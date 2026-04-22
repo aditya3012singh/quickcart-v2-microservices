@@ -1,12 +1,12 @@
 const amqp = require("amqplib");
+const logger = require("../utils/logger");
 
 async function startPaymentConsumer() {
   const conn = await amqp.connect("amqp://rabbitmq");
   const channel = await conn.createChannel();
 
-  // Better error handling
-  channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error (Payment Service):", err.message));
-  channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed (Payment Service)"));
+  channel.on("error", (err) => logger.error({ event: "mq_channel_error", service: "payment-service", error: err.message }));
+  channel.on("close", () => logger.warn({ event: "mq_channel_closed", service: "payment-service" }));
 
   // 1. DLX Setup
   await channel.assertExchange("order_dlx", "direct", { durable: true });
@@ -27,43 +27,62 @@ async function startPaymentConsumer() {
 
   channel.prefetch(1);
 
-  console.log("💳 Payment Service listening for ORDER_CREATED (Saga Orchestrator)");
+  logger.info({ event: "CONSUMER_STARTED", message: "Payment Service listening for ORDER_CREATED events" });
 
   channel.consume("order_created", async (msg) => {
     if (!msg) return;
 
+    const start = Date.now();
     try {
       const event = JSON.parse(msg.content.toString());
-      const { orderId, productId, quantity } = event;
+      const { orderId, productId, quantity, correlationId, eventId } = event;
 
-      console.log(`💰 Processing payment for order ${orderId}`);
+      logger.info({ 
+        event: "PAYMENT_PROCESSING_STARTED", 
+        orderId, 
+        correlationId,
+        eventId 
+      });
 
       // 🔥 Simulate payment (80% success)
       const isSuccess = Math.random() < 0.8;
+      const durationMs = Date.now() - start;
+
+      const payload = { orderId, productId, quantity, correlationId, eventId };
 
       if (isSuccess) {
-        console.log(`✅ Payment SUCCESS for order ${orderId}`);
-        // Publish to EXCHANGE
+        logger.info({ 
+          event: "PAYMENT_SUCCESS", 
+          orderId, 
+          correlationId, 
+          eventId,
+          durationMs 
+        });
         channel.publish(
           EXCHANGE_NAME,
           "payment_success",
-          Buffer.from(JSON.stringify({ orderId, productId, quantity })),
+          Buffer.from(JSON.stringify(payload)),
           { persistent: true }
         );
       } else {
-        console.log(`❌ Payment FAILED for order ${orderId}`);
-        // Publish to EXCHANGE
+        logger.warn({ 
+          event: "PAYMENT_FAILED", 
+          orderId, 
+          correlationId, 
+          eventId,
+          durationMs 
+        });
         channel.publish(
           EXCHANGE_NAME,
           "payment_failed",
-          Buffer.from(JSON.stringify({ orderId, productId, quantity })),
+          Buffer.from(JSON.stringify(payload)),
           { persistent: true }
         );
       }
 
       channel.ack(msg);
     } catch (err) {
-      console.error("❌ Payment processing error:", err.message);
+      logger.error({ event: "PAYMENT_PROCESSING_ERROR", error: err.message });
       channel.nack(msg, false, true); 
     }
   });
