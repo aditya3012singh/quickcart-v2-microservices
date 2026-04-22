@@ -4,9 +4,15 @@ package product;
 
 service ProductService{
     rpc ReserveStock (ReserveRequest) returns (ReserveResponse);
+    rpc ReleaseStock (ReleaseRequest) returns (ReserveResponse);
 }
 
 message ReserveRequest{
+    int32 productId=1;
+    int32 quantity=2;
+}
+
+message ReleaseRequest{
     int32 productId=1;
     int32 quantity=2;
 }

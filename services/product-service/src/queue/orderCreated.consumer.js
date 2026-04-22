@@ -8,31 +8,39 @@ async function startConsumer(retries = 20, delay = 2000) {
       const conn = await amqp.connect("amqp://rabbitmq");
       const channel = await conn.createChannel();
 
-      // Better error handling
-      channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error:", err.message));
-      channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed"));
+      channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error (Product Service):", err.message));
+      channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed (Product Service)"));
 
       // 1. DLX Setup
       await channel.assertExchange("order_dlx", "direct", { durable: true });
-      await channel.assertQueue("product_error_dlq", { durable: true });
-      await channel.bindQueue("product_error_dlq", "order_dlx", "dlq");
 
-      // 2. Shared Queues (Matching payment-service schema exactly)
+      // 2. EXCHANGE Setup (Saga Outcomes)
+      const EXCHANGE_NAME = "payment_exchange";
+      await channel.assertExchange(EXCHANGE_NAME, "direct", { durable: true });
+
+      // 3. Service-Specific Queues & Bindings
+      // We use unique queue names so each service gets its own copy of the message
+      const SUCCESS_QUEUE = "product_payment_success_queue";
+      const FAILED_QUEUE = "product_payment_failed_queue";
+
       const qOptions = {
         durable: true,
         deadLetterExchange: "order_dlx",
         deadLetterRoutingKey: "dlq"
       };
 
-      await channel.assertQueue("payment_success", qOptions);
-      await channel.assertQueue("payment_failed", qOptions);
+      await channel.assertQueue(SUCCESS_QUEUE, qOptions);
+      await channel.bindQueue(SUCCESS_QUEUE, EXCHANGE_NAME, "payment_success");
+
+      await channel.assertQueue(FAILED_QUEUE, qOptions);
+      await channel.bindQueue(FAILED_QUEUE, EXCHANGE_NAME, "payment_failed");
 
       channel.prefetch(1);
 
-      console.log("📦 Product Service listening for PAYMENT_SUCCESS and PAYMENT_FAILED");
+      console.log("📦 Product Service listening for PAYMENT_SUCCESS and PAYMENT_FAILED (Pub-Sub)");
 
       // 🔄 PAYMENT_SUCCESS -> Confirm Stock
-      channel.consume("payment_success", async (msg) => {
+      channel.consume(SUCCESS_QUEUE, async (msg) => {
         if (!msg) return;
 
         let client;
@@ -43,7 +51,6 @@ async function startConsumer(retries = 20, delay = 2000) {
           client = await pool.connect();
           await client.query("BEGIN");
 
-          // Transactional Idempotency Check
           const idempotencyResult = await client.query(
             "INSERT INTO processed_orders (order_id) VALUES ($1) ON CONFLICT (order_id) DO NOTHING RETURNING *",
             [orderId]
@@ -55,7 +62,6 @@ async function startConsumer(retries = 20, delay = 2000) {
             return channel.ack(msg);
           }
 
-          // Atomic Stock Update
           const result = await client.query(
             `UPDATE products
              SET stock = stock - $1,
@@ -83,8 +89,8 @@ async function startConsumer(retries = 20, delay = 2000) {
         }
       });
 
-      // 🔄 PAYMENT_FAILED -> Release Stock (Compensation)
-      channel.consume("payment_failed", async (msg) => {
+      // 🔄 PAYMENT_FAILED -> Release Stock
+      channel.consume(FAILED_QUEUE, async (msg) => {
         if (!msg) return;
 
         try {
@@ -100,7 +106,7 @@ async function startConsumer(retries = 20, delay = 2000) {
 
       return;
     } catch (err) {
-      console.error("❌ RabbitMQ connection failed:", err.message);
+      console.error("❌ RabbitMQ connection failed (Product Service):", err.message);
       retries--;
       if (retries === 0) process.exit(1);
       console.log(`⏳ Retrying RabbitMQ in ${delay / 1000}s... (${retries} left)`);

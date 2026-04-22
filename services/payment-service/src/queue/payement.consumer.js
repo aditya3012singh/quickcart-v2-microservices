@@ -5,24 +5,25 @@ async function startPaymentConsumer() {
   const channel = await conn.createChannel();
 
   // Better error handling
-  channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error:", err.message));
-  channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed"));
+  channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error (Payment Service):", err.message));
+  channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed (Payment Service)"));
 
-  // 1. DLX Setup (Must match other services)
+  // 1. DLX Setup
   await channel.assertExchange("order_dlx", "direct", { durable: true });
   await channel.assertQueue("order_created_dlq", { durable: true });
   await channel.bindQueue("order_created_dlq", "order_dlx", "dlq");
 
-  // 2. Shared Queue Setup (Must match product-service EXACTLY)
-  const qOptions = {
+  // 2. EXCHANGE Setup (Saga Outcomes)
+  const EXCHANGE_NAME = "payment_exchange";
+  await channel.assertExchange(EXCHANGE_NAME, "direct", { durable: true });
+
+  // 3. Entry Queue (order_created)
+  const entryQOptions = {
     durable: true,
     deadLetterExchange: "order_dlx",
     deadLetterRoutingKey: "dlq"
   };
-
-  await channel.assertQueue("order_created", qOptions);
-  await channel.assertQueue("payment_success", qOptions);
-  await channel.assertQueue("payment_failed", qOptions);
+  await channel.assertQueue("order_created", entryQOptions);
 
   channel.prefetch(1);
 
@@ -42,14 +43,18 @@ async function startPaymentConsumer() {
 
       if (isSuccess) {
         console.log(`✅ Payment SUCCESS for order ${orderId}`);
-        channel.sendToQueue(
+        // Publish to EXCHANGE
+        channel.publish(
+          EXCHANGE_NAME,
           "payment_success",
           Buffer.from(JSON.stringify({ orderId, productId, quantity })),
           { persistent: true }
         );
       } else {
         console.log(`❌ Payment FAILED for order ${orderId}`);
-        channel.sendToQueue(
+        // Publish to EXCHANGE
+        channel.publish(
+          EXCHANGE_NAME,
           "payment_failed",
           Buffer.from(JSON.stringify({ orderId, productId, quantity })),
           { persistent: true }

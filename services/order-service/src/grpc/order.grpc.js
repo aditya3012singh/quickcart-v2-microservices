@@ -26,6 +26,20 @@ function reserveStock(productId, quantity) {
   });
 }
 
+function releaseStock(productId, quantity) {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000;
+    client.ReleaseStock(
+      { productId, quantity },
+      { deadline },
+      (err, res) => {
+        if (err) return reject(err);
+        resolve(res);
+      }
+    );
+  });
+}
+
 async function reserveStockWithRetry(productId, quantity, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -50,7 +64,7 @@ async function reserveStockWithRetry(productId, quantity, retries = 3) {
   return { success: false, message: "Could not acquire lock, try later" };
 }
 
-module.exports = { reserveStockWithRetry };
+module.exports = { reserveStockWithRetry, releaseStock };
 
 // function reserveStock(productId, quantity) {
 //   return new Promise((resolve, reject) => {
