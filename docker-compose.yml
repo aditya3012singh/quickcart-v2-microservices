@@ -74,6 +74,13 @@ services:
     depends_on:
       - product-service
       - order-service
+      - payment-service
+      
+  payment-service:
+    build: ./services/payment-service
+    container_name: payment-service
+    depends_on:
+      - rabbitmq
 
 volumes:
   product-db-data:

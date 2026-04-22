@@ -57,4 +57,30 @@ async function reserveStock(productId, quantity) {
   }
 }
 
-module.exports = { reserveStock };
+async function releaseStock(productId, quantity) {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    console.log(`🔄 Releasing ${quantity} unit(s) of reserved stock for product ${productId}`);
+    
+    await client.query(
+      `UPDATE products
+       SET reserved_stock = reserved_stock - $1
+       WHERE id = $2`,
+      [quantity, productId]
+    );
+
+    await client.query("COMMIT");
+    console.log(`✅ Stock released successfully for product ${productId}`);
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ releaseStock error:", err.message);
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { reserveStock, releaseStock };
