@@ -1,5 +1,6 @@
 const amqp = require("amqplib");
 const { pool } = require("../db/pool");
+const logger = require("../utils/logger");
 
 async function startOutboxWorker(retries = 20, delay = 3000) {
   let connection;
@@ -11,10 +12,14 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
       connection = await amqp.connect("amqp://rabbitmq");
       channel = await connection.createChannel();
       
-      console.log("✅ Outbox Worker connected to RabbitMQ");
+      logger.info({ event: "OUTBOX_MQ_CONNECTED", message: "Outbox Worker connected to RabbitMQ" });
       break;
     } catch (err) {
-      console.error("❌ Outbox Worker RabbitMQ connection failed:", err.message);
+      logger.error({ 
+        event: "outbox_worker_mq_connection_failed", 
+        error: err.message,
+        retriesLeft: retries - 1 
+      });
       retries--;
       if (retries === 0) process.exit(1);
       await new Promise(res => setTimeout(res, delay));
@@ -33,16 +38,17 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
       );
 
       for (const event of result.rows) {
+        const { correlationId } = event.payload;
         try {
-          console.log(`📤 Outbox: Processing event ${event.id} (${event.event_type})`);
+          logger.info({ 
+            event: "OUTBOX_PROCESSING", 
+            eventId: event.id, 
+            eventType: event.event_type,
+            correlationId 
+          });
 
           // Logic for different event types
           if (event.event_type === "ORDER_CREATED") {
-             // For now, we publish to the direct 'order_created' queue or exchange
-             // We'll use the existing logic from orderPublish.js but inlined or imported
-             // Actually, orderPublish.js uses an exchange if we refactored it. 
-             // Let's assume we publish to a specific queue or exchange.
-             
              const queue = "order_created";
              const qOptions = {
                 durable: true,
@@ -51,7 +57,11 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
              };
              
              await channel.assertQueue(queue, qOptions);
-             channel.sendToQueue(queue, Buffer.from(JSON.stringify(event.payload)), { persistent: true });
+
+             // 🔥 Inject eventId into the payload before publishing
+             const enrichedPayload = { ...event.payload, eventId: event.id };
+             
+             channel.sendToQueue(queue, Buffer.from(JSON.stringify(enrichedPayload)), { persistent: true });
           }
 
           // Mark as SENT
@@ -60,14 +70,23 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
             [event.id]
           );
           
-          console.log(`✅ Outbox: Event ${event.id} published and marked SENT`);
+          logger.info({ 
+            event: "OUTBOX_PUBLISHED", 
+            eventId: event.id, 
+            correlationId 
+          });
           
         } catch (publishErr) {
-          console.error(`❌ Outbox: Failed to publish event ${event.id}:`, publishErr.message);
+          logger.error({ 
+            event: "OUTBOX_PUBLISH_FAILED", 
+            eventId: event.id, 
+            error: publishErr.message,
+            correlationId 
+          });
         }
       }
     } catch (err) {
-      console.error("❌ Outbox Worker Error:", err.message);
+      logger.error({ event: "outbox_worker_error", error: err.message });
     } finally {
       if (client) client.release();
     }

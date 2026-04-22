@@ -1,5 +1,6 @@
 const amqp = require("amqplib");
 const { pool } = require("../db/pool");
+const logger = require("../utils/logger");
 
 async function startPaymentConsumer(retries = 20, delay = 3000) {
   while (retries > 0) {
@@ -7,8 +8,8 @@ async function startPaymentConsumer(retries = 20, delay = 3000) {
       const conn = await amqp.connect("amqp://rabbitmq");
       const channel = await conn.createChannel();
 
-      channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error (Order Service):", err.message));
-      channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed (Order Service)"));
+      channel.on("error", (err) => logger.error({ event: "mq_channel_error", service: "order-service", error: err.message }));
+      channel.on("close", () => logger.warn({ event: "mq_channel_closed", service: "order-service" }));
 
       // 1. DLX Setup
       await channel.assertExchange("order_dlx", "direct", { durable: true });
@@ -35,15 +36,15 @@ async function startPaymentConsumer(retries = 20, delay = 3000) {
 
       channel.prefetch(1);
 
-      console.log("📩 Order Service listening for payment_success and payment_failed (Pub-Sub)");
+      logger.info({ event: "CONSUMER_STARTED", message: "Order Service listening for payment outcomes" });
 
       // ✅ Handle PAYMENT_SUCCESS
       channel.consume(SUCCESS_QUEUE, async (msg) => {
         if (!msg) return;
 
         try {
-          const { orderId } = JSON.parse(msg.content.toString());
-          console.log(`💰 [PAYMENT_SUCCESS] Processing order ${orderId}`);
+          const { orderId, correlationId, eventId } = JSON.parse(msg.content.toString());
+          logger.info({ event: "PAYMENT_SUCCESS_RECEIVED", orderId, correlationId, eventId });
 
           const result = await pool.query(
             "UPDATE orders SET status = 'PAID' WHERE id = $1 AND status = 'CREATED' RETURNING *",
@@ -51,14 +52,23 @@ async function startPaymentConsumer(retries = 20, delay = 3000) {
           );
 
           if (result.rows.length === 0) {
-            console.log(`⚠️ Order ${orderId} status update ignored (Already processed or invalid state)`);
+            logger.warn({ event: "ORDER_STATUS_UPDATE_IGNORED", orderId, reason: "Invalid state or already processed", correlationId, eventId });
           } else {
-            console.log(`✅ Order ${orderId} marked as PAID`);
+            logger.info({ event: "ORDER_PAID", orderId, correlationId, eventId });
+            
+            // 🎯 End of Lifecycle Summary
+            logger.info({ 
+              event: "ORDER_FLOW_COMPLETED", 
+              finalStatus: "PAID", 
+              orderId, 
+              correlationId, 
+              eventId 
+            });
           }
 
           channel.ack(msg);
         } catch (err) {
-          console.error("❌ Error updating order to PAID:", err.message);
+          logger.error({ event: "SUCCESS_CONSUMER_ERROR", error: err.message, correlationId });
           channel.nack(msg, false, true); 
         }
       });
@@ -68,8 +78,8 @@ async function startPaymentConsumer(retries = 20, delay = 3000) {
         if (!msg) return;
 
         try {
-          const { orderId } = JSON.parse(msg.content.toString());
-          console.log(`❌ [PAYMENT_FAILED] Processing order ${orderId}`);
+          const { orderId, correlationId, eventId } = JSON.parse(msg.content.toString());
+          logger.info({ event: "PAYMENT_FAILED_RECEIVED", orderId, correlationId, eventId });
 
           const result = await pool.query(
             "UPDATE orders SET status = 'FAILED' WHERE id = $1 AND status = 'CREATED' RETURNING *",
@@ -77,24 +87,32 @@ async function startPaymentConsumer(retries = 20, delay = 3000) {
           );
 
           if (result.rows.length === 0) {
-            console.log(`⚠️ Order ${orderId} status update ignored (Already processed or invalid state)`);
+            logger.warn({ event: "ORDER_STATUS_UPDATE_IGNORED", orderId, reason: "Invalid state or already processed", correlationId, eventId });
           } else {
-            console.log(`⚠️ Order ${orderId} marked as FAILED`);
+            logger.info({ event: "ORDER_FAILED", orderId, correlationId, eventId });
+
+            // 🎯 End of Lifecycle Summary
+            logger.info({ 
+              event: "ORDER_FLOW_COMPLETED", 
+              finalStatus: "FAILED", 
+              orderId, 
+              correlationId, 
+              eventId 
+            });
           }
 
           channel.ack(msg);
         } catch (err) {
-          console.error("❌ Error updating order to FAILED:", err.message);
+          logger.error({ event: "FAILED_CONSUMER_ERROR", error: err.message, correlationId });
           channel.nack(msg, false, true);
         }
       });
 
       return;
     } catch (err) {
-      console.error("❌ RabbitMQ connection failed (Order Service):", err.message);
+      logger.error({ event: "mq_connection_failed", service: "order-service", error: err.message });
       retries--;
       if (retries === 0) process.exit(1);
-      console.log(`⏳ Retrying RabbitMQ in ${delay / 1000}s... (${retries} left)`);
       await new Promise((res) => setTimeout(res, delay));
     }
   }
