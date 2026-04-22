@@ -14,9 +14,13 @@ const client = new productPackage.ProductService(
 
 function reserveStock(productId, quantity, correlationId, orderId = "", eventId = "") {
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 5000; // 5 second timeout
+    const deadline = Date.now() + 5000;
+    const metadata = new grpc.Metadata();
+    metadata.set("x-correlation-id", correlationId);
+
     client.ReserveStock(
       { productId, quantity, correlationId, orderId, eventId },
+      metadata,
       { deadline },
       (err, res) => {
         if (err) return reject(err);
@@ -29,8 +33,12 @@ function reserveStock(productId, quantity, correlationId, orderId = "", eventId 
 function releaseStock(productId, quantity, correlationId, orderId = "", eventId = "") {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + 5000;
+    const metadata = new grpc.Metadata();
+    metadata.set("x-correlation-id", correlationId);
+
     client.ReleaseStock(
       { productId, quantity, correlationId, orderId, eventId },
+      metadata,
       { deadline },
       (err, res) => {
         if (err) return reject(err);

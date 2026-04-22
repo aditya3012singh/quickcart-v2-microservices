@@ -39,12 +39,13 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
 
       for (const event of result.rows) {
         const { correlationId } = event.payload;
+        const outboxLogger = logger.child({ correlationId });
+
         try {
-          logger.info({ 
+          outboxLogger.info({ 
             event: "OUTBOX_PROCESSING", 
             eventId: event.id, 
-            eventType: event.event_type,
-            correlationId 
+            eventType: event.event_type
           });
 
           // Logic for different event types
@@ -61,7 +62,10 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
              // 🔥 Inject eventId into the payload before publishing
              const enrichedPayload = { ...event.payload, eventId: event.id };
              
-             channel.sendToQueue(queue, Buffer.from(JSON.stringify(enrichedPayload)), { persistent: true });
+             channel.sendToQueue(queue, Buffer.from(JSON.stringify(enrichedPayload)), { 
+                persistent: true,
+                headers: { "x-correlation-id": correlationId }
+             });
           }
 
           // Mark as SENT
@@ -70,18 +74,16 @@ async function startOutboxWorker(retries = 20, delay = 3000) {
             [event.id]
           );
           
-          logger.info({ 
+          outboxLogger.info({ 
             event: "OUTBOX_PUBLISHED", 
-            eventId: event.id, 
-            correlationId 
+            eventId: event.id
           });
           
         } catch (publishErr) {
-          logger.error({ 
+          outboxLogger.error({ 
             event: "OUTBOX_PUBLISH_FAILED", 
             eventId: event.id, 
-            error: publishErr.message,
-            correlationId 
+            error: publishErr.message
           });
         }
       }

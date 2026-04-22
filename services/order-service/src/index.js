@@ -31,23 +31,29 @@ app.get("/metrics", async (req, res) => {
   res.end(await client.register.metrics());
 });
 
+const { v4: uuidv4 } = require("uuid");
+
+// 🔥 Correlation ID & Context Logger Middleware
+app.use((req, res, next) => {
+  req.correlationId = req.headers["x-correlation-id"] || uuidv4();
+  res.setHeader("x-correlation-id", req.correlationId);
+  req.logger = logger.child({ correlationId: req.correlationId });
+  next();
+});
+
 app.post("/", async (req, res) => {
   const { productId, quantity } = req.body;
+  const { correlationId, logger: reqLogger } = req;
   let reservationSuccessful = false;
 
   if (!productId || quantity <= 0) {
     return res.status(400).json({ error: "Invalid input" });
   }
 
-  // 🔥 Generate Correlation ID early
-  const requestId = Math.random().toString(36).substring(7);
-  const correlationId = `order-req-${requestId}`;
-
-  logger.info({ 
+  reqLogger.info({ 
     event: "ORDER_REQUEST_RECEIVED", 
     productId, 
-    quantity, 
-    correlationId 
+    quantity
   });
 
   const client = await pool.connect();
@@ -56,11 +62,10 @@ app.post("/", async (req, res) => {
     const result = await reserveStockWithRetry(productId, quantity, correlationId);
 
     if (!result.success) {
-      logger.warn({ 
+      reqLogger.warn({ 
         event: "STOCK_RESERVATION_REFUSED", 
         productId, 
-        reason: result.message,
-        correlationId 
+        reason: result.message
       });
       return res.status(400).json({ error: result.message });
     }
@@ -78,15 +83,12 @@ app.post("/", async (req, res) => {
 
     const order = dbResult.rows[0];
     
-    // Update correlationId to be more specific to the order once we have the ID
-    const orderCorrelationId = `order-${order.id}`;
-
     // 🔥 Add to Outbox Table
     const eventPayload = {
       orderId: order.id,
       productId,
       quantity,
-      correlationId: orderCorrelationId
+      correlationId // Use the consistent correlationId (UUID)
     };
 
     await client.query(
@@ -100,10 +102,9 @@ app.post("/", async (req, res) => {
     // 🔥 Metrics: Inc order count
     ordersCreated.inc();
     
-    logger.info({ 
+    reqLogger.info({ 
       event: "ORDER_CREATED_AND_OUTBOX_SAVED", 
-      orderId: order.id, 
-      correlationId: orderCorrelationId 
+      orderId: order.id
     });
 
     res.json(order);
@@ -111,25 +112,22 @@ app.post("/", async (req, res) => {
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     
-    logger.error({ 
+    reqLogger.error({ 
       event: "ORDER_CREATION_FAILED", 
-      error: err.message, 
-      correlationId 
+      error: err.message
     });
 
     // 🧟 Compensation: Release stock if reservation was successful but subsequent steps failed
     if (reservationSuccessful) {
-      logger.info({ 
+      reqLogger.info({ 
         event: "COMPENSATION_TRIGGERED", 
-        productId, 
-        correlationId 
+        productId
       });
 
       await releaseStock(productId, quantity, correlationId).catch(e => {
-        logger.error({ 
+        reqLogger.error({ 
           event: "COMPENSATION_FAILED", 
-          error: e.message, 
-          correlationId 
+          error: e.message
         });
       });
     }
