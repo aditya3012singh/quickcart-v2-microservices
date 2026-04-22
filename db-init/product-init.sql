@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 -- Seed data
 INSERT INTO products (id, stock, reserved_stock)
-VALUES (1, 10, 0)
+VALUES (1, 100, 0)
 ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS processed_orders (

@@ -7,14 +7,20 @@ service ProductService{
     rpc ReleaseStock (ReleaseRequest) returns (ReserveResponse);
 }
 
-message ReserveRequest{
-    int32 productId=1;
-    int32 quantity=2;
+message ReserveRequest {
+  string productId = 1;
+  int32 quantity = 2;
+  string correlationId = 3;
+  string orderId = 4;
+  string eventId = 5;
 }
 
-message ReleaseRequest{
-    int32 productId=1;
-    int32 quantity=2;
+message ReleaseRequest {
+  string productId = 1;
+  int32 quantity = 2;
+  string correlationId = 3;
+  string orderId = 4;
+  string eventId = 5;
 }
 
 message ReserveResponse {

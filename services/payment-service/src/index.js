@@ -1,8 +1,20 @@
 const startPaymentConsumer = require("./queue/payement.consumer.js");
 const logger = require("./utils/logger");
+const express = require("express");
+const { client } = require("./utils/metrics");
 
 async function start(retries = 10, delay = 3000) {
   logger.info({ event: "SERVICE_STARTING", message: "Starting Payment Service..." });
+
+  // 🔥 Minimal HTTP server for metrics
+  const app = express();
+  app.get("/metrics", async (req, res) => {
+    res.set("Content-Type", client.register.contentType);
+    res.end(await client.register.metrics());
+  });
+
+  const port = process.env.PORT || 3004;
+  app.listen(port, () => logger.info({ event: "METRICS_SERVER_STARTED", port, message: `Payment Metrics running on ${port}` }));
 
   while (retries > 0) {
     try {

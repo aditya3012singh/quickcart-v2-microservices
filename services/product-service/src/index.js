@@ -2,10 +2,11 @@ const startGrpcServer = require("./grpc/product.grpc");
 const startConsumer = require("./queue/orderCreated.consumer");
 const { connectWithRetry, pool, initDB } = require("./db/pool");
 const express = require("express");
+const logger = require("./utils/logger");
 
 async function start() {
   try {
-    console.log("🚀 Starting Product Service...");
+    logger.info({ event: "SERVICE_STARTING", message: "Starting Product Service..." });
 
     await connectWithRetry();
     await initDB();
@@ -18,6 +19,28 @@ async function start() {
 
     // Minimal HTTP server for gateway reverse-proxy and health checks
     const app = express();
+    const { client, httpRequestDuration } = require("./utils/metrics");
+
+    // 🔥 HTTP Latency Middleware
+    app.use((req, res, next) => {
+      const end = httpRequestDuration.startTimer();
+
+      res.on("finish", () => {
+        end({
+          method: req.method,
+          route: req.path,
+          status: res.statusCode,
+        });
+      });
+
+      next();
+    });
+
+    // 🔥 Metrics Endpoint
+    app.get("/metrics", async (req, res) => {
+      res.set("Content-Type", client.register.contentType);
+      res.end(await client.register.metrics());
+    });
 
     app.get("/", (req, res) => res.json({ status: "ok" }));
 
@@ -26,17 +49,17 @@ async function start() {
         const result = await pool.query("SELECT id, stock, reserved_stock FROM products ORDER BY id");
         res.json(result.rows);
       } catch (err) {
-        console.error("❌ Failed to fetch products:", err);
+        logger.error({ event: "FETCH_PRODUCTS_FAILED", error: err.message });
         res.status(500).json({ error: "Failed to fetch products" });
       }
     });
 
     const port = process.env.PORT || 3002;
-    app.listen(port, () => console.log(`🚀 Product HTTP running on ${port}`));
+    app.listen(port, () => logger.info({ event: "HTTP_SERVER_STARTED", port, message: `Product HTTP running on ${port}` }));
 
-    console.log("✅ Product Service running");
+    logger.info({ event: "SERVICE_READY", message: "Product Service running" });
   } catch (err) {
-    console.error("❌ Startup failed:", err);
+    logger.error({ event: "SERVICE_STARTUP_FAILED", error: err.message, stack: err.stack });
     process.exit(1);
   }
 }

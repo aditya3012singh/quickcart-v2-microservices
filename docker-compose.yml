@@ -38,6 +38,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: productdb
+      SERVICE_NAME: product-service
     depends_on:
       - product-db
       - rabbitmq
@@ -53,6 +54,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: orderdb
+      SERVICE_NAME: order-service
     depends_on:
       - order-db
       - rabbitmq
@@ -79,8 +81,24 @@ services:
   payment-service:
     build: ./services/payment-service
     container_name: payment-service
+    ports:
+      - "3004:3004"
+    environment:
+      SERVICE_NAME: payment-service 
     depends_on:
       - rabbitmq
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - order-service
+      - product-service
+      - payment-service
 
 volumes:
   product-db-data:

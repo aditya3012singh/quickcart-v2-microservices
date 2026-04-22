@@ -1,4 +1,6 @@
 const { pool } = require("../db/pool");
+const logger = require("../utils/logger");
+const { stockReserveSuccess, stockReserveFailed } = require("../utils/metrics");
 
 async function reserveStock(productId, quantity) {
   if (!productId || quantity <= 0) {
@@ -20,6 +22,7 @@ async function reserveStock(productId, quantity) {
 
     if (result.rows.length === 0) {
       await client.query("ROLLBACK");
+      stockReserveFailed.inc();
       return { success: false, message: "Product not found" };
     }
 
@@ -28,6 +31,7 @@ async function reserveStock(productId, quantity) {
 
     if (available < quantity) {
       await client.query("ROLLBACK");
+      stockReserveFailed.inc();
       return { success: false, message: "Insufficient stock" };
     }
 
@@ -40,16 +44,18 @@ async function reserveStock(productId, quantity) {
 
     await client.query("COMMIT");
 
+    stockReserveSuccess.inc();
     return { success: true };
 
   } catch (err) {
     await client.query("ROLLBACK");
+    stockReserveFailed.inc();
 
      if (err.code === "55P03") { // lock not available
         return { success: false, message: "Resource busy, try again" };
     }
 
-    console.error("❌ reserveStock error:", err);
+    logger.error({ event: "reserve_stock_error", productId, error: err.message });
 
     return { success: false, message: "Internal error" };
   } finally {
@@ -57,13 +63,20 @@ async function reserveStock(productId, quantity) {
   }
 }
 
-async function releaseStock(productId, quantity) {
+async function releaseStock(productId, quantity, orderId, correlationId, eventId) {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    console.log(`🔄 Releasing ${quantity} unit(s) of reserved stock for product ${productId}`);
+    logger.info({ 
+      event: "RELEASING_STOCK", 
+      orderId, 
+      productId, 
+      quantity, 
+      correlationId, 
+      eventId 
+    });
     
     await client.query(
       `UPDATE products
@@ -73,11 +86,25 @@ async function releaseStock(productId, quantity) {
     );
 
     await client.query("COMMIT");
-    console.log(`✅ Stock released successfully for product ${productId}`);
+    logger.info({ 
+      event: "STOCK_RELEASED", 
+      orderId, 
+      productId, 
+      quantity, 
+      correlationId, 
+      eventId 
+    });
 
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("❌ releaseStock error:", err.message);
+    logger.error({ 
+      event: "RELEASE_STOCK_ERROR", 
+      orderId, 
+      productId, 
+      error: err.message, 
+      correlationId, 
+      eventId 
+    });
   } finally {
     client.release();
   }

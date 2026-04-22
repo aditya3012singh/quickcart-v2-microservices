@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const logger = require("../utils/logger");
 
 const pool = new Pool({
   host: "product-db",
@@ -17,19 +18,27 @@ async function connectWithRetry(retries = 5, delay = 2000) {
   while (retries > 0) {
     try {
       await pool.query("SELECT 1");
-      console.log("✅ Connected to PostgreSQL");
+      logger.info({ event: "DB_CONNECTED", message: "Connected to PostgreSQL" });
       return;
     } catch (err) {
-      console.error("❌ DB connection failed:", err.message);
+      logger.error({ 
+        event: "DB_CONNECTION_FAILED", 
+        error: err.message,
+        stack: err.stack 
+      });
 
       retries--;
 
       if (retries === 0) {
-        console.error("❌ Exhausted all retries. Exiting...");
+        logger.error({ event: "DB_RETRIES_EXHAUSTED", message: "Exhausted all retries. Exiting..." });
         process.exit(1);
       }
 
-      console.log(`⏳ Retrying in ${delay / 1000}s... (${retries} left)`);
+      logger.info({ 
+        event: "DB_CONNECTION_RETRY", 
+        delaySeconds: delay / 1000, 
+        retriesLeft: retries 
+      });
       await new Promise((res) => setTimeout(res, delay));
     }
   }
@@ -42,9 +51,9 @@ async function initDB() {
         order_id INT PRIMARY KEY
       )
     `);
-    console.log("✅ Database tables initialized (processed_orders)");
+    logger.info({ event: "DB_INITIALIZED", message: "Database tables initialized (processed_orders)" });
   } catch (err) {
-    console.error("❌ Database initialization failed:", err.message);
+    logger.error({ event: "DB_INITIALIZATION_FAILED", error: err.message });
     throw err;
   }
 }

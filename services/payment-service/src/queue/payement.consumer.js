@@ -1,5 +1,6 @@
 const amqp = require("amqplib");
 const logger = require("../utils/logger");
+const { paymentSuccess, paymentFailed } = require("../utils/metrics");
 
 async function startPaymentConsumer() {
   const conn = await amqp.connect("amqp://rabbitmq");
@@ -35,12 +36,15 @@ async function startPaymentConsumer() {
     const start = Date.now();
     try {
       const event = JSON.parse(msg.content.toString());
-      const { orderId, productId, quantity, correlationId, eventId } = event;
+      const { orderId, productId, quantity, correlationId: payloadId, eventId } = event;
+      
+      // 🔥 Extract from headers or fallback to payload
+      const correlationId = msg.properties.headers?.["x-correlation-id"] || payloadId;
+      const childLogger = logger.child({ correlationId });
 
-      logger.info({ 
+      childLogger.info({ 
         event: "PAYMENT_PROCESSING_STARTED", 
         orderId, 
-        correlationId,
         eventId 
       });
 
@@ -51,10 +55,12 @@ async function startPaymentConsumer() {
       const payload = { orderId, productId, quantity, correlationId, eventId };
 
       if (isSuccess) {
-        logger.info({ 
+        // 🔥 Metrics: Inc success
+        paymentSuccess.inc();
+
+        childLogger.info({ 
           event: "PAYMENT_SUCCESS", 
           orderId, 
-          correlationId, 
           eventId,
           durationMs 
         });
@@ -62,13 +68,18 @@ async function startPaymentConsumer() {
           EXCHANGE_NAME,
           "payment_success",
           Buffer.from(JSON.stringify(payload)),
-          { persistent: true }
+          { 
+            persistent: true,
+            headers: { "x-correlation-id": correlationId }
+          }
         );
       } else {
-        logger.warn({ 
+        // 🔥 Metrics: Inc failure
+        paymentFailed.inc();
+
+        childLogger.warn({ 
           event: "PAYMENT_FAILED", 
           orderId, 
-          correlationId, 
           eventId,
           durationMs 
         });
@@ -76,7 +87,10 @@ async function startPaymentConsumer() {
           EXCHANGE_NAME,
           "payment_failed",
           Buffer.from(JSON.stringify(payload)),
-          { persistent: true }
+          { 
+            persistent: true,
+            headers: { "x-correlation-id": correlationId }
+          }
         );
       }
 

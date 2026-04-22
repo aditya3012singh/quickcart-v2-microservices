@@ -1,6 +1,7 @@
 const amqp = require("amqplib");
 const { pool } = require("../db/pool");
 const { releaseStock } = require("../services/product.service");
+const logger = require("../utils/logger");
 
 async function startConsumer(retries = 20, delay = 2000) {
   while (retries > 0) {
@@ -8,8 +9,8 @@ async function startConsumer(retries = 20, delay = 2000) {
       const conn = await amqp.connect("amqp://rabbitmq");
       const channel = await conn.createChannel();
 
-      channel.on("error", (err) => console.error("❌ RabbitMQ Channel Error (Product Service):", err.message));
-      channel.on("close", () => console.log("⚠️ RabbitMQ Channel Closed (Product Service)"));
+      channel.on("error", (err) => logger.error({ event: "MQ_CHANNEL_ERROR", service: "product-service", error: err.message }));
+      channel.on("close", () => logger.warn({ event: "MQ_CHANNEL_CLOSED", service: "product-service" }));
 
       // 1. DLX Setup
       await channel.assertExchange("order_dlx", "direct", { durable: true });
@@ -19,7 +20,6 @@ async function startConsumer(retries = 20, delay = 2000) {
       await channel.assertExchange(EXCHANGE_NAME, "direct", { durable: true });
 
       // 3. Service-Specific Queues & Bindings
-      // We use unique queue names so each service gets its own copy of the message
       const SUCCESS_QUEUE = "product_payment_success_queue";
       const FAILED_QUEUE = "product_payment_failed_queue";
 
@@ -37,7 +37,7 @@ async function startConsumer(retries = 20, delay = 2000) {
 
       channel.prefetch(1);
 
-      console.log("📦 Product Service listening for PAYMENT_SUCCESS and PAYMENT_FAILED (Pub-Sub)");
+      logger.info({ event: "CONSUMER_STARTED", message: "Product Service listening for payment outcomes" });
 
       // 🔄 PAYMENT_SUCCESS -> Confirm Stock
       channel.consume(SUCCESS_QUEUE, async (msg) => {
@@ -45,8 +45,13 @@ async function startConsumer(retries = 20, delay = 2000) {
 
         let client;
         try {
-          const { orderId, productId, quantity } = JSON.parse(msg.content.toString());
-          console.log(`✅ [PAYMENT_SUCCESS] Finalizing stock for order ${orderId}`);
+          const payload = JSON.parse(msg.content.toString());
+          const { orderId, productId, quantity, correlationId: payloadId, eventId } = payload;
+          
+          const correlationId = msg.properties.headers?.["x-correlation-id"] || payloadId;
+          const childLogger = logger.child({ correlationId });
+
+          childLogger.info({ event: "PROCESSING_PAYMENT_SUCCESS", orderId, eventId });
 
           client = await pool.connect();
           await client.query("BEGIN");
@@ -57,7 +62,7 @@ async function startConsumer(retries = 20, delay = 2000) {
           );
 
           if (idempotencyResult.rows.length === 0) {
-            console.log(`⚠️ Duplicate event ignored for order ${orderId}.`);
+            childLogger.warn({ event: "DUPLICATE_EVENT_IGNORED", orderId, eventId });
             await client.query("ROLLBACK");
             return channel.ack(msg);
           }
@@ -72,17 +77,17 @@ async function startConsumer(retries = 20, delay = 2000) {
           );
 
           if (result.rows.length === 0) {
-            console.error(`❌ ERROR: Stock confirmation failed for order ${orderId}.`);
+            childLogger.error({ event: "STOCK_CONFIRMATION_FAILED", orderId, eventId });
             await client.query("COMMIT");
             return channel.nack(msg, false, false);
           }
 
-          console.log(`🎉 Stock confirmed permanently for order ${orderId}`);
+          childLogger.info({ event: "STOCK_CONFIRMED", orderId, eventId });
           await client.query("COMMIT");
           channel.ack(msg);
         } catch (err) {
           if (client) await client.query("ROLLBACK").catch(() => {});
-          console.error(`❌ Error processing payment_success:`, err.message);
+          logger.error({ event: "PAYMENT_SUCCESS_PROCESSING_ERROR", error: err.message });
           channel.nack(msg, false, true);
         } finally {
           if (client) client.release();
@@ -94,22 +99,28 @@ async function startConsumer(retries = 20, delay = 2000) {
         if (!msg) return;
 
         try {
-          const { orderId, productId, quantity } = JSON.parse(msg.content.toString());
-          console.log(`🔄 [PAYMENT_FAILED] Compensation: Releasing stock for order ${orderId}`);
-          await releaseStock(productId, quantity);
+          const payload = JSON.parse(msg.content.toString());
+          const { orderId, productId, quantity, correlationId: payloadId, eventId } = payload;
+          
+          const correlationId = msg.properties.headers?.["x-correlation-id"] || payloadId;
+          const childLogger = logger.child({ correlationId });
+
+          childLogger.info({ event: "PROCESSING_PAYMENT_FAILED", orderId, eventId });
+          
+          await releaseStock(productId, quantity, orderId, correlationId, eventId);
+          
           channel.ack(msg);
         } catch (err) {
-          console.error("❌ Error processing payment_failed:", err.message);
+          logger.error({ event: "PAYMENT_FAILED_PROCESSING_ERROR", error: err.message });
           channel.nack(msg, false, true); 
         }
       });
 
       return;
     } catch (err) {
-      console.error("❌ RabbitMQ connection failed (Product Service):", err.message);
+      logger.error({ event: "MQ_CONNECTION_FAILED", service: "product-service", error: err.message });
       retries--;
       if (retries === 0) process.exit(1);
-      console.log(`⏳ Retrying RabbitMQ in ${delay / 1000}s... (${retries} left)`);
       await new Promise((res) => setTimeout(res, delay));
     }
   }
