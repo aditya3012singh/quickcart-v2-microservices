@@ -8,3 +8,7 @@ CREATE TABLE IF NOT EXISTS products (
 INSERT INTO products (id, stock, reserved_stock)
 VALUES (1, 10, 0)
 ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS processed_orders (
+  order_id INT PRIMARY KEY
+);

@@ -9,7 +9,11 @@ async function initPublisher(retries = 5, delay = 2000) {
       const conn = await amqp.connect("amqp://rabbitmq");
       channel = await conn.createChannel();
 
-      await channel.assertQueue("order_created", { durable: true });
+      await channel.assertQueue("order_created", {
+        durable: true,
+        deadLetterExchange: "order_dlx",
+        deadLetterRoutingKey: "dlq"
+      });
 
       console.log("✅ RabbitMQ publisher ready");
       return;

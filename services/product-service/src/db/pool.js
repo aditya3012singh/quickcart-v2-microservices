@@ -35,7 +35,21 @@ async function connectWithRetry(retries = 5, delay = 2000) {
   }
 }
 
-module.exports = { pool, connectWithRetry };
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS processed_orders (
+        order_id INT PRIMARY KEY
+      )
+    `);
+    console.log("✅ Database tables initialized (processed_orders)");
+  } catch (err) {
+    console.error("❌ Database initialization failed:", err.message);
+    throw err;
+  }
+}
+
+module.exports = { pool, connectWithRetry, initDB };
 
 
 // const pool = new Pool({

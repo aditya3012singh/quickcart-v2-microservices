@@ -1,6 +1,6 @@
 const express = require("express");
 const { connectWithRetry, pool } = require("./db/pool");
-const { reserveStock } = require("./grpc/order.grpc");
+const { reserveStockWithRetry } = require("./grpc/order.grpc");
 const { initPublisher, publishOrder } = require("./queue/orderPublish");
 
 const app = express();
@@ -17,7 +17,7 @@ app.post("/", async (req, res) => {
     // 🔥 Step 1: Reserve stock (atomic)
     // ⚠️ PHASE 1 LIMITATION: If order creation fails below, stock remains reserved forever
     // This will be fixed in Phase 2 with saga compensation (releaseReservation RPC call)
-    const result = await reserveStock(productId, quantity);
+    const result = await reserveStockWithRetry(productId, quantity);
 
     if (!result.success) {
       return res.status(400).json({ error: result.message });

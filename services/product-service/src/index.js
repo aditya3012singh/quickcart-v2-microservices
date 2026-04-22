@@ -1,6 +1,6 @@
 const startGrpcServer = require("./grpc/product.grpc");
 const startConsumer = require("./queue/orderCreated.consumer");
-const { connectWithRetry, pool } = require("./db/pool");
+const { connectWithRetry, pool, initDB } = require("./db/pool");
 const express = require("express");
 
 async function start() {
@@ -8,6 +8,7 @@ async function start() {
     console.log("🚀 Starting Product Service...");
 
     await connectWithRetry();
+    await initDB();
 
     // Start gRPC server
     startGrpcServer();
