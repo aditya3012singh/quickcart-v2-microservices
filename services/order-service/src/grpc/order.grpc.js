@@ -85,6 +85,9 @@ async function reserveStockWithRetry(productId, quantity, correlationId, retries
 
 module.exports = { reserveStockWithRetry, releaseStock };
 
+
+
+
 // function reserveStock(productId, quantity) {
 //   return new Promise((resolve, reject) => {
 //     const deadline = Date.now() + 5000;  // 5 second timeout

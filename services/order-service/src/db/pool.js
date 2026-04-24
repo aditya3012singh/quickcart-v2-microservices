@@ -7,8 +7,6 @@ const pool = new Pool({
   password: "postgres",
   database: "orderdb",
   port: 5432,
-
-  // ✅ Important configs
   max: 10, // max connections
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
